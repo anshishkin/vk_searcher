@@ -1,0 +1,10 @@
+id: id
+first_name: first_name
+last_name: last_name
+date_of_birth: bdate
+region: 
+  city: title
+country: 
+  country: title
+gender: sex
+username: screen_name
