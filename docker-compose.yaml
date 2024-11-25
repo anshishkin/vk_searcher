@@ -1,0 +1,57 @@
+version: '3.1'
+services:
+  vk_searcher:
+    ipc: host
+    image: vk_searcher:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./:/app
+    env_file:
+      - .env
+    environment:
+      POSTGRES_PARSER_DATABASE_CONNECTION_URL: postgresql+psycopg2://vk_searcher:vk_searcher@vk_postgres/vk_searcher
+    command: bash -c "python db/postgres/orm.py && python aiogram_run.py"
+    #stdin_open: true # docker run -i
+    #tty: true        # docker run -t
+    depends_on:
+      vk_postgres:
+        condition: service_started
+    networks:
+      services-network:
+        aliases:
+          - vk_searcher
+  
+  vk_postgres:
+    image: postgres:14
+    command:
+      - postgres
+      - -c
+      - max_connections=150
+    environment:
+      POSTGRES_USER: vk_searcher
+      POSTGRES_PASSWORD: vk_searcher
+      POSTGRES_DB: vk_searcher
+    healthcheck:
+      interval: 10s
+      retries: 60
+      start_period: 2s
+      test: pg_isready -q -d $${POSTGRES_DB} -U $${POSTGRES_USER} | grep "accepting connections" || exit 1
+      timeout: 2s
+    restart: on-failure
+    expose:
+      - 5432
+    ports:
+      - 25432:5432
+    volumes:
+      - ./volumes/vk_postgres:/var/lib/postgresql/data
+    networks:
+      services-network:
+        aliases:
+          - vk_postgres
+
+networks:
+  services-network:
+    name: services-network
+    driver: bridge
