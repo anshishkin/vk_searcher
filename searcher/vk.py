@@ -18,33 +18,44 @@ from urllib.parse import urlparse
 from time import time
 import pandas as pd
 import logging
+from core.config import VKConfig
 from db.postgres.orm import Session, engine, VK_Contact
 
 logger = logging.getLogger(__name__)
+
 with open("core/vk_config.yaml") as stream:
     templates = yaml.safe_load(stream)
+
 
 def counted(f):
     def wrapped(*args, **kwargs):
         wrapped.calls += 1
         return f(*args, **kwargs)
+
     wrapped.calls = 0
-    return wrapped   
+    return wrapped
+
 
 class VKSearcher(ABC):
     android_resolution = "1200x1290"  # ['1024x600', '1280x800', '480x854', '720x1280', '1200x1290', '2560x1600', '768x1280', '1080x1920','800x1280']
     android_sdk = "30"  # [{'sdkVersion':'28','androidVersion':'9'},{'sdkVersion':'29','androidVersion':'10'},{'sdkVersion':'30','androidVersion':'11'},{'sdkVersion':'31','androidVersion':'12'},{'sdkVersion':'33','androidVersion':'13'}]
     android_version = "11"
     android_model = "SM-A515"  # ['SM-A505F','SM-A515','SM-A516F','SM-A526B','SM-A710F','SM-A530F']
-    limit = 3
+    history = {}
+    start_login = 0
 
-    def __init__(self, proxies: list = None, sessionVerify: bool = True):
+    def __init__(self, config: VKConfig):
+        self.config = config
         self.session = requests.session()
-        self.proxies = proxies
-        self.start_time = time()
+        self.proxies = config.proxies
+        self.next_login = self.start_login + 1
+        self.start_time_login = time()
         if self.proxies is not None:
             proxy = random.choice(self.proxies)
-            self.set_proxy(proxy, sessionVerify)
+            self.set_proxy(proxy, config.session_verify)
+
+        self.login, self.password = config.auth[self.start_login].values()
+        self.auth_username(username=self.login, password=self.password)
 
     def set_proxy(self, proxy, session_verify):
         self.session.verify = session_verify
@@ -59,17 +70,14 @@ class VKSearcher(ABC):
                 "https": proxy_href,
             }
 
-    def login(self, username: str, password: str):
-        self.username = username
+    def auth_username(self, username: str, password: str):
+        self.login = username
         self.password = password
-        self.generate_init()
-
-    def generate_init(self):
         self.useragent = f"VKAndroidApp/7.24-3439 (Android {self.android_version}; SDK {self.android_sdk}; armeabi-v7a; samsung {self.android_model}; ru; {self.android_resolution})"
         self.device_uuid = str(uuid.uuid4())
 
         # DeviceHash
-        seed = hashlib.md5(self.username.encode("utf-8") + self.password.encode("utf-8")).hexdigest()
+        seed = hashlib.md5(username.encode("utf-8") + self.password.encode("utf-8")).hexdigest()
         m = hashlib.md5()
         m.update(seed.encode("utf-8"))
         device_hash = m.hexdigest()[:16]
@@ -87,37 +95,67 @@ class VKSearcher(ABC):
             "lang": "ru",
             "device_id": device_hash,
             "grant_type": "password",
-            "username": self.username,
+            "username": username,
             "password": self.password,
             "libverify_support": "0",
         }
         self.auth_parser(
             self.session.get("https://oauth.vk.com/token", params=auth_params, headers=auth_headers).json()
         )
-    
-    def is_possible_requests(self):
-        current_time = time()
-        #print(self.search_contact.calls)
-        if self.__class__.search_contact.calls < self.limit:
-            return True
-        elif current_time - self.start_time > 30:
-            self.start_time = current_time
-            self.refresh_param()
-            self.__class__.search_contact.calls  = 0
-            return True
-        else:
-            return False
 
-    def refresh_param(self):
-        if self.proxies is not None and len(self.proxies) > 1:
+    def router_username(self):
+        current_time = time()
+        if __class__.get_profile_by_token.calls == 1:
+            self.create_history(current_time)
+            # self.start_time = current_time
+        if self.__class__.get_profile_by_token.calls < self.config.limit_requests:
+            return
+
+        if len(self.config.auth) > self.next_login:
+            self.login, self.password = self.config.auth[self.next_login].values()
+            self.auth_username(username=self.login, password=self.password)
+            self.create_history(current_time)
+            self.__class__.get_profile_by_token.calls = 1
+            self.next_login = self.next_login + 1
+            self.refresh_proxy()
+            logger.info("Refresh change auth success")
+
+        else:
+            login, password = self.config.auth[self.start_login].values()
+            start_time, user_id, access_token, secret = self.history[login].values()
+            if current_time - start_time > self.config.time_period:
+                # self.auth_username(username=self.login, password=self.password)
+                self.login, self.password, self.user_id, self.access_token, self.secret = (
+                    login,
+                    password,
+                    user_id,
+                    access_token,
+                    secret,
+                )
+                self.update_tokens()
+                self.create_history(current_time)
+                self.__class__.get_profile_by_token.calls = 1
+                self.next_login = self.start_login + 1
+                self.refresh_proxy()
+                logger.info("Refresh token and secret success")
+            else:
+                raise FloodError("Flood control triggerred, change bot account")
+
+    def create_history(self, current_time):
+        self.history[self.login] = {
+            "start_time": current_time,
+            "user_id": self.user_id,
+            "access_token": self.access_token,
+            "secret": self.secret,
+        }
+
+    def refresh_proxy(self):
+        if self.proxies is not None:
             proxy = random.choice(self.proxies)
-            while self.session.proxies.values() == proxy:
-                proxy = random.choice(self.proxies)
-            self.change_proxy(proxy)
-        self.update_tokens()
+            self.change_proxy(proxy, VKConfig.session_verify)
 
     def update_tokens_parser(self, tokens_data):
-        self.accessToken = tokens_data["response"]["token"]
+        self.access_token = tokens_data["response"]["token"]
         self.secret = tokens_data["response"]["secret"]
 
     def change_proxy(self, proxy: str, session_verify: bool = True):
@@ -135,40 +173,41 @@ class VKSearcher(ABC):
             "access_token": self.access_token,
         }
 
-        tokens_data = self.makeRequest("auth.refreshToken", data)
+        tokens_data = self.make_request("auth.refreshToken", data)
         self.update_tokens_parser(tokens_data)
 
     def get_result(self, phone_numbers: list):
         self.parsed_data = {}
         for self.phone_number in phone_numbers:
-            self.profile_data = {}
-            self.search_contact()
-            self.contact_parser()
-            if self.found:
-                self.get_profile()
-            self.profile_parser_api()
-        return self.parsed_data
-    
+            result = self.router_username()
+            if not isinstance(result, Exception):
+                self.profile_data = {}
+                self.search_contact()
+                self.contact_parser()
+                if self.found:
+                    self.get_profile()
+                self.profile_parser_api()
+                return self.parsed_data
+            else:
+                raise FloodError("Flood control triggerred, change bot account")
+
     @counted
     def search_contact(self):
-        if self.is_possible_requests():
-            contacts = {"phone": {"user_contact": self.username, "contacts": self.phone_number}}
-            data = {
-                "v": "5.96",
-                "https": "1",
-                "device_id": self.device_uuid,
-                "fields": "online,photo_50,photo_100,photo_200,career,city,country,education,verified,trending",
-                "lang": "ru",
-                "search_only": "0",
-                "count": "5000",
-                "contacts": json.dumps(contacts, separators=(",", ":")),
-                "need_mutual": "1",
-                "access_token": self.access_token,
-            }
-            contact_data = self.make_request("account.searchContacts", data)
-            self.contact_data = contact_data
-        else:
-            raise LimitError("Requests limits reached")
+        contacts = {"phone": {"user_contact": self.login, "contacts": self.phone_number}}
+        data = {
+            "v": "5.96",
+            "https": "1",
+            "device_id": self.device_uuid,
+            "fields": "online,photo_50,photo_100,photo_200,career,city,country,education,verified,trending",
+            "lang": "ru",
+            "search_only": "0",
+            "count": "5000",
+            "contacts": json.dumps(contacts, separators=(",", ":")),
+            "need_mutual": "1",
+            "access_token": self.access_token,
+        }
+        contact_data = self.make_request("account.searchContacts", data)
+        self.contact_data = contact_data
 
     def get_profile(self):
         data = {
@@ -190,24 +229,6 @@ class VKSearcher(ABC):
             "access_token": self.access_token,
         }
         self.profile_data = self.make_request("execute.getFullProfileNewNew", data)
-
-    def get_user_profile(self, user_id):
-        data = {
-            "user_id": user_id,
-            "is_owner": "0",
-            #'privacy_section': 'stories, audios',
-            "is_photo_feed": "1",
-            "nfts_limit": "15",
-            "is_nft_request_updated": "0",
-            "func_v": "8",
-            "lang": "ru",
-            "device_id": self.device_uuid,
-            "v": "5.96",
-            "https": "1",
-            "access_token": self.access_token,
-        }
-
-        self.profile_user = self.make_request("execute.getUserProfileContent", data)
 
     def make_request(self, method, data):
 
@@ -247,7 +268,7 @@ class VKSearcher(ABC):
     def auth_parser(self, auth_data):
         if "error_description" in auth_data and auth_data["error_description"] == "Неправильный логин или пароль":
             raise WrongAuthCredientals(
-                f"Login or password is incorrect\nLogin : {self.username}\nPassword : {self.password}\n"
+                f"Login or password is incorrect\nLogin : {self.login}\nPassword : {self.password}\n"
             )
         if "access_token" and "user_id" and "secret" in auth_data:
             self.set_tokens(auth_data)
@@ -309,13 +330,13 @@ class VKSearcher(ABC):
             session.close()
         df_ = df.drop(columns=df.columns[(df == "nan").all()]).dropna(axis=1, how="all")
         return df_.iloc[:, 1:]
-    
+
     @counted
-    def get_profile_by_token(self, id, token):
+    def get_profile_by_token(self, id):
         return requests.post(
             "https://api.vk.com/method/users.get",
             params={
-                "access_token": token,
+                "access_token": self.config.service_token,
                 "v": 5.131,
                 "user_ids": id,
                 "lang": "ru",
