@@ -16,10 +16,15 @@ from aiogram.types.input_file import FSInputFile
 import pandas as pd
 import re
 from aiogram.enums import ParseMode
-import requests
+from pathlib import Path
+import random
 
-vkInstance = VKSearcher()
-vkInstance.login(username=config.VKConfig.login, password=config.VKConfig.password)
+DEFAULT_TEMP_PATH = os.getenv("DEFAULT_TEMP_PATH")
+
+path = Path(__file__).parent.parent.absolute()
+Path(str(path) + DEFAULT_TEMP_PATH).mkdir(parents=True, exist_ok=True)
+
+vkInstance = VKSearcher(config.VKConfig)
 
 command_router = Router(name="command_router")
 
@@ -36,7 +41,7 @@ async def start_handler(message: Message):
 
 @command_router.callback_query(DownloadDataCallback.filter(F.source == "vk"), F.from_user.id.in_(config.USER_ID_LIST))
 async def download_handler(callback_query: CallbackQuery, callback_data: DownloadDataCallback):
-    path = f"{config.DEFAULT_TEMP_PATH}/{callback_data.file}.csv"
+    path = f".{DEFAULT_TEMP_PATH}/{callback_data.file}.csv"
     await callback_query.message.answer_document(document=FSInputFile(path))
     os.system(f"rm {path}")
 
@@ -94,7 +99,7 @@ async def found_data_handler(msg: Message):
                 df_fin = pd.DataFrame.from_dict(parsedData, orient="index")
                 df_fin["phone_number"] = phone_numbers
                 df_fin.iloc[:, 1:].to_csv(
-                    path_or_buf=f"{config.DEFAULT_TEMP_PATH}/{uuid_hex}.csv", sep=",", encoding="utf-8", index=False
+                    path_or_buf=f".{DEFAULT_TEMP_PATH}/{uuid_hex}.csv", sep=",", encoding="utf-8", index=False
                 )
                 button = InlineKeyboardButton(
                     text=" ✔️ Скачать", callback_data=DownloadDataCallback(source="vk", file=uuid_hex).pack()
@@ -110,7 +115,7 @@ async def found_data_handler(msg: Message):
         vk_id = msg_text.split("id")[1]
         if vk_id.isdigit():
             try:
-                parsedData = vkInstance.get_profile_by_token(vk_id, config.VKConfig.service_token)
+                parsedData = vkInstance.get_profile_by_token(vk_id)
             except:
                 await msg.answer(
                     f"🚫 Сервис API VK не доступен \n ℹ️ Попробуйте через несколько часов или обратитесь к администратору"
@@ -137,7 +142,7 @@ async def found_data_handler(msg: Message):
                 format_parsedData[vk_id] = parsedData
                 df_fin = pd.DataFrame.from_dict(format_parsedData, orient="index")
                 df_fin.drop(["can_access_closed", "is_closed"], axis=1).to_csv(
-                    path_or_buf=f"{config.DEFAULT_TEMP_PATH}/{uuid_hex}.csv", sep=",", encoding="utf-8", index=False
+                    path_or_buf=f".{DEFAULT_TEMP_PATH}/{uuid_hex}.csv", sep=",", encoding="utf-8", index=False
                 )
                 button = InlineKeyboardButton(
                     text=" ✔️ Скачать", callback_data=DownloadDataCallback(source="vk", file=uuid_hex).pack()

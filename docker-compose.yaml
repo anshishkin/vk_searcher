@@ -9,7 +9,7 @@ services:
     volumes:
       - ./:/app
     env_file:
-      - .env
+      - .dev.env
     environment:
       POSTGRES_PARSER_DATABASE_CONNECTION_URL: postgresql+psycopg2://vk_searcher:vk_searcher@vk_postgres/vk_searcher
     command: bash -c "python db/postgres/orm.py && python aiogram_run.py"
